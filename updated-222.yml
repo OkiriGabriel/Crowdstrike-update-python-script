@@ -1,0 +1,144 @@
+name: push-common-files-to-lhdi-repos
+run-name: "Push Common Files to LHDI Repos"
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+  workflow_dispatch:
+    inputs:
+      files:
+        description: 'Comma-separated list of files to push'
+        required: false
+        default: '.github/workflows/create-release-on-tag-push.yml,.github/pull_request_template.md'
+      delete_before_push:
+        description: 'Delete files before pushing'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  Push-Common-Files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Push common files
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs').promises;
+            const { INPUT_FILES, INPUT_DELETE_BEFORE_PUSH } = process.env;
+
+            const filesToPush = INPUT_FILES.split(',');
+
+            async function getLhdiRepos() {
+              const repos = await github.paginate(github.rest.repos.listForOrg, {
+                org: 'department-of-veterans-affairs',
+                per_page: 100
+              });
+              return repos
+                .filter(repo => repo.name.startsWith('lighthouse-di-') || repo.name.startsWith('lhdi-'))
+                .map(repo => repo.name);
+            }
+
+            async function pushFiles() {
+              const repos = await getLhdiRepos();
+              console.log(`LHDI repos: ${repos.join(', ')}`);
+
+              for (const repo of repos) {
+                for (const file of filesToPush) {
+                  try {
+                    const content = await fs.readFile(file, 'utf8');
+                    const branchName = `update-${file.replace(/\//g, '-')}`;
+                    
+                    let createPR = true;
+
+                    if (!INPUT_DELETE_BEFORE_PUSH) {
+                      try {
+                        const { data: existingFile } = await github.rest.repos.getContent({
+                          owner: context.repo.owner,
+                          repo: repo,
+                          path: file,
+                          ref: 'main'
+                        });
+                        const existingContent = Buffer.from(existingFile.content, 'base64').toString('utf8');
+                        if (existingContent === content) {
+                          console.log(`File ${file} in ${repo} is up to date`);
+                          createPR = false;
+                        }
+                      } catch (error) {
+                        if (error.status !== 404) throw error;
+                        // File doesn't exist, so we need to create it
+                      }
+                    }
+
+                    if (createPR) {
+                      // Get the latest commit SHA of the main branch
+                      const { data: ref } = await github.rest.git.getRef({
+                        owner: context.repo.owner,
+                        repo: repo,
+                        ref: 'heads/main'
+                      });
+                      const latestCommitSha = ref.object.sha;
+
+                      // Create a new branch
+                      await github.rest.git.createRef({
+                        owner: context.repo.owner,
+                        repo: repo,
+                        ref: `refs/heads/${branchName}`,
+                        sha: latestCommitSha
+                      });
+
+                      // Delete the file if INPUT_DELETE_BEFORE_PUSH is true
+                      if (INPUT_DELETE_BEFORE_PUSH) {
+                        try {
+                          const { data: existingFile } = await github.rest.repos.getContent({
+                            owner: context.repo.owner,
+                            repo: repo,
+                            path: file,
+                            ref: branchName
+                          });
+                          await github.rest.repos.deleteFile({
+                            owner: context.repo.owner,
+                            repo: repo,
+                            path: file,
+                            message: `Delete ${file} before updating`,
+                            sha: existingFile.sha,
+                            branch: branchName
+                          });
+                        } catch (error) {
+                          if (error.status !== 404) throw error;
+                          // File doesn't exist, no need to delete
+                        }
+                      }
+
+                      // Create or update the file
+                      await github.rest.repos.createOrUpdateFileContents({
+                        owner: context.repo.owner,
+                        repo: repo,
+                        path: file,
+                        message: `Update ${file}`,
+                        content: Buffer.from(content).toString('base64'),
+                        branch: branchName
+                      });
+
+                      // Create a pull request
+                      await github.rest.pulls.create({
+                        owner: context.repo.owner,
+                        repo: repo,
+                        title: `Update ${file}`,
+                        head: branchName,
+                        base: 'main',
+                        body: 'Automated PR to update common files'
+                      });
+
+                      console.log(`Created PR for ${file} in ${repo}`);
+                    }
+                  } catch (error) {
+                    console.error(`Error updating ${file} in ${repo}: ${error}`);
+                  }
+                }
+              }
+            }
+
+            pushFiles();

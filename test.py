@@ -2,19 +2,15 @@ import boto3
 import json
 import logging
 
-
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 def lambda_handler(event, context):
-
     instance_id = event['detail']['instance-id']
     
-    # Set up AWS clients
     ssm = boto3.client('ssm')
     ec2 = boto3.client('ec2')
 
-    # Configure variables
     aws_bucket = "crowdstrike-config"
     install_path = "Security/deploy/installs/Crowdstrike/"
     windows_installer = "WindowsSensor (2).exe"
@@ -23,8 +19,6 @@ def lambda_handler(event, context):
     
     logger.info(f"Initiating CrowdStrike installation on instance {instance_id}")
 
-
-    # Check if the instance is Linux or Windows
     try:
         instance_info = ec2.describe_instances(InstanceIds=[instance_id])
         platform = instance_info['Reservations'][0]['Instances'][0].get('Platform')
@@ -44,7 +38,6 @@ def lambda_handler(event, context):
             'body': json.dumps('Error: Failed to detect instance platform')
         }
 
-   
     if platform == 'windows':
         command = f"""
         aws s3 cp s3://{aws_bucket}/{install_path}{installer} C:\\Windows\\Temp\\
@@ -66,12 +59,11 @@ def lambda_handler(event, context):
         ps -e | grep falcon-sensor || echo "The falcon-sensor is not running successfully! Please start the service"
         """
 
- 
     try:
         response = ssm.send_command(
             InstanceIds=[instance_id],
             DocumentName='AWS-RunShellScript' if command_type == 'bash' else 'AWS-RunPowerShellScript',
-            Parameters={'commands': [command]}
+            Parameters={'commands': [command]},
         )
         command_id = response['Command']['CommandId']
         logger.info(f"SSM Command sent. Command ID: {command_id}")
@@ -82,20 +74,10 @@ def lambda_handler(event, context):
             'body': json.dumps('Error: Failed to send SSM command')
         }
 
-    # Wait for command to complete
-
-
-    # Get command output
-    try:
-        output = ssm.get_command_invocation(
-            CommandId=command_id,
-            InstanceId=instance_id
-        )
-        logger.info(f"Command output: {output['StandardOutputContent']}")
-    except Exception as e:
-        logger.error(f"Error getting command output: {str(e)}")
-
     return {
         'statusCode': 200,
-        'body': json.dumps(f'CrowdStrike installation completed on instance {instance_id}')
+        'body': json.dumps(f'CrowdStrike installation initiated on instance {instance_id}')
     }
+    
+ 
+    

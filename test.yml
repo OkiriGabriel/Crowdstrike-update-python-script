@@ -1,0 +1,451 @@
+# name: push-common-files-to-lhdi-repos
+# run-name: "Push Common Files to LHDI Repos"
+# on:
+#   schedule:
+#     - cron: '0 0 * * *'  # Run daily at midnight UTC
+#   workflow_dispatch:
+#     inputs:
+#       files:
+#         description: 'Comma-separated list of files to push (default: all)'
+#         required: false
+#         default: ''
+
+# jobs:
+#   Push-Common-Files:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout lighthouse-di-documentation
+#         uses: actions/checkout@v3
+#         with:
+#           repository: 'department-of-veterans-affairs/lighthouse-di-documentation'
+#           path: 'lighthouse-di-documentation'
+
+#       - name: Setup GitHub CLI
+#         uses: cli/setup-gh@v1
+
+#       - name: Get LHDI repos
+#         id: get-repos
+#         run: |
+#           repos=$(gh repo list department-of-veterans-affairs --json name --jq '[.[] | select(.name | startswith("lighthouse-di-") or startswith("lhdi-")) | .name] | join(",")')
+#           echo "repos=$repos" >> $GITHUB_OUTPUT
+
+#       - name: Push common files
+#         env:
+#           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#         run: |
+#           cd lighthouse-di-documentation
+#           if [ -z "${{ github.event.inputs.files }}" ]; then
+#             files=(".github/workflows/create-release-on-tag-push.yml" ".github/pull_request_template.md")
+#           else
+#             IFS=',' read -ra files <<< "${{ github.event.inputs.files }}"
+#           fi
+          
+#           for repo in $(echo ${{ steps.get-repos.outputs.repos }} | tr ',' ' '); do
+#             for file in "${files[@]}"; do
+#               if [ ! -f "$file" ]; then
+#                 echo "File $file not found in lighthouse-di-documentation"
+#                 continue
+#               fi
+              
+#               dir=$(dirname "$file")
+#               mkdir -p "/tmp/$repo/$dir"
+#               cp "$file" "/tmp/$repo/$file"
+              
+#               cd "/tmp/$repo"
+#               if ! gh repo clone "department-of-veterans-affairs/$repo" . 2>/dev/null; then
+#                 echo "Failed to clone $repo"
+#                 continue
+#               fi
+              
+#               if [ -f "$file" ] && cmp -s "$file" "/tmp/$repo/$file"; then
+#                 echo "File $file in $repo is up to date"
+#               else
+#                 cp "/tmp/$repo/$file" "$file"
+#                 git config user.name "GitHub Actions"
+#                 git config user.email "actions@github.com"
+#                 git add "$file"
+#                 git commit -m "Update $file from lighthouse-di-documentation"
+#                 git push
+#                 echo "Updated $file in $repo"
+#               fi
+              
+#               cd -
+#             done
+#           done
+
+#       - name: Cleanup
+#         if: always()
+#         run: |
+#           rm -rf /tmp/*
+
+
+
+
+# name: push-common-files-to-lhdi-repos
+# run-name: "Push Common Files to LHDI Repos"
+# on:
+#   schedule:
+#     - cron: '0 0 * * *'  # Run daily at midnight UTC
+#   workflow_dispatch:
+#     inputs:
+#       files:
+#         description: 'Comma-separated list of files to push (default: all)'
+#         required: false
+#         default: ''
+
+# jobs:
+#   Push-Common-Files:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v3
+
+#       - name: Setup Node.js
+#         uses: actions/setup-node@v3
+#         with:
+#           node-version: '16'
+
+#       - name: Install dependencies
+#         run: npm install @octokit/rest fs
+
+#       - name: Push common files
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#         run: |
+#           const { Octokit } = require("@octokit/rest");
+#           const fs = require('fs').promises;
+
+#           const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+
+#           const defaultFiles = [
+#             '.github/workflows/create-release-on-tag-push.yml',
+#             '.github/pull_request_template.md'
+#           ];
+
+#           const filesToPush = process.env.INPUT_FILES
+#             ? process.env.INPUT_FILES.split(',')
+#             : defaultFiles;
+
+#           async function getLhdiRepos() {
+#             const repos = await octokit.paginate(octokit.repos.listForOrg, {
+#               org: 'department-of-veterans-affairs',
+#               per_page: 100
+#             });
+#             return repos
+#               .filter(repo => repo.name.startsWith('lighthouse-di-') || repo.name.startsWith('lhdi-'))
+#               .map(repo => repo.name);
+#           }
+
+#           async function pushFiles() {
+#             const repos = await getLhdiRepos();
+#             console.log(`LHDI repos: ${repos.join(', ')}`);
+
+#             for (const repo of repos) {
+#               for (const file of filesToPush) {
+#                 try {
+#                   const content = await fs.readFile(file, 'utf8');
+#                   const branchName = `update-${file.replace(/\//g, '-')}`;
+                  
+#                   // Check if file exists and is different
+#                   let needsUpdate = true;
+#                   try {
+#                     const { data: existingFile } = await octokit.repos.getContent({
+#                       owner: 'department-of-veterans-affairs',
+#                       repo: repo,
+#                       path: file,
+#                       ref: 'main'
+#                     });
+#                     const existingContent = Buffer.from(existingFile.content, 'base64').toString('utf8');
+#                     if (existingContent === content) {
+#                       console.log(`File ${file} in ${repo} is up to date`);
+#                       needsUpdate = false;
+#                     }
+#                   } catch (error) {
+#                     if (error.status !== 404) throw error;
+#                     // File doesn't exist, so we need to create it
+#                   }
+
+#                   if (needsUpdate) {
+#                     // Get the SHA of the main branch
+#                     const { data: mainBranch } = await octokit.repos.getBranch({
+#                       owner: 'department-of-veterans-affairs',
+#                       repo: repo,
+#                       branch: 'main'
+#                     });
+
+#                     // Create a new branch
+#                     await octokit.git.createRef({
+#                       owner: 'department-of-veterans-affairs',
+#                       repo: repo,
+#                       ref: `refs/heads/${branchName}`,
+#                       sha: mainBranch.commit.sha
+#                     });
+                    
+#                     // Update file in the new branch
+#                     await octokit.repos.createOrUpdateFileContents({
+#                       owner: 'department-of-veterans-affairs',
+#                       repo: repo,
+#                       path: file,
+#                       message: `Update ${file} from lighthouse-di-documentation`,
+#                       content: Buffer.from(content).toString('base64'),
+#                       branch: branchName
+#                     });
+                    
+#                     // Create a pull request
+#                     await octokit.pulls.create({
+#                       owner: 'department-of-veterans-affairs',
+#                       repo: repo,
+#                       title: `Update ${file} from lighthouse-di-documentation`,
+#                       head: branchName,
+#                       base: 'main',
+#                       body: `This PR updates ${file} with the latest version from lighthouse-di-documentation.`
+#                     });
+                    
+#                     console.log(`Created PR to update ${file} in ${repo}`);
+#                   }
+#                 } catch (error) {
+#                   console.error(`Error updating ${file} in ${repo}: ${error}`);
+#                 }
+#               }
+#             }
+#           }
+
+#           pushFiles();
+#         shell: node {0}
+
+
+
+name: push-common-files-to-lhdi-repos
+run-name: "Push Common Files to LHDI Repos"
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+  workflow_dispatch:
+    inputs:
+      files:
+        description: 'Comma-separated list of files to push (default: all)'
+        required: false
+        default: ''
+      delete_before_push:
+        description: 'Delete files before pushing (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  Push-Common-Files:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+
+      - name: Install dependencies
+        run: npm install @octokit/rest fs
+
+      - name: Push common files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          const { Octokit } = require("@octokit/rest");
+          const fs = require('fs').promises;
+
+          const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+
+          const defaultFiles = [
+            '.github/workflows/create-release-on-tag-push.yml',
+            '.github/pull_request_template.md'
+          ];
+
+          const filesToPush = process.env.INPUT_FILES
+            ? process.env.INPUT_FILES.split(',')
+            : defaultFiles;
+
+          async function getLhdiRepos() {
+            const repos = await octokit.paginate(octokit.repos.listForOrg, {
+              org: 'department-of-veterans-affairs',
+              per_page: 100
+            });
+            return repos
+              .filter(repo => repo.name.startsWith('lighthouse-di-') || repo.name.startsWith('lhdi-'))
+              .map(repo => repo.name);
+          }
+
+          async function pushFiles() {
+            const repos = await getLhdiRepos();
+            console.log(`LHDI repos: ${repos.join(', ')}`);
+
+            for (const repo of repos) {
+              for (const file of filesToPush) {
+                try {
+                  if (process.env.INPUT_DELETE_BEFORE_PUSH === 'true') {
+                    try {
+                      const { data: existingFile } = await octokit.repos.getContent({
+                        owner: 'department-of-veterans-affairs',
+                        repo: repo,
+                        path: file,
+                        ref: 'main'
+                      });
+                      await octokit.repos.deleteFile({
+                        owner: 'department-of-veterans-affairs',
+                        repo: repo,
+                        path: file,
+                        message: `Delete ${file} before re-pushing`,
+                        sha: existingFile.sha,
+                        branch: 'main'
+                      });
+                      console.log(`Deleted ${file} from ${repo}`);
+                    } catch (error) {
+                      if (error.status !== 404) console.error(`Error deleting ${file} from ${repo}: ${error}`);
+                    }
+                  }
+
+                  const content = await fs.readFile(file, 'utf8');
+                  const branchName = `update-${file.replace(/\//g, '-')}`;
+                  
+                  // Check if file exists and is different
+                  let needsUpdate = true;
+                  try {
+                    const { data: existingFile } = await octokit.repos.getContent({
+                      owner: 'department-of-veterans-affairs',
+                      repo: repo,
+                      path: file,
+                      ref: 'main'
+                    });
+                    const existingContent = Buffer.from(existingFile.content, 'base64').toString('utf8');
+                    if (existingContent === content) {
+                      console.log(`File ${file} in ${repo} is up to date`);
+                      needsUpdate = false;
+                    }
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                    // File doesn't exist, so we need to create it
+                  }
+
+                  if (needsUpdate) {
+                    // Get the SHA of the main branch
+                    const { data: mainBranch } = await octokit.repos.getBranch({
+                      owner: 'department-of-veterans-affairs',
+                      repo: repo,
+                      branch: 'main'
+                    });
+
+                    // Create a new branch
+                    await octokit.git.createRef({
+                      owner: 'department-of-veterans-affairs',
+                      repo: repo,
+                      ref: `refs/heads/${branchName}`,
+                      sha: mainBranch.commit.sha
+                    });
+                    
+                    // Update file in the new branch
+                    await octokit.repos.createOrUpdateFileContents({
+                      owner: 'department-of-veterans-affairs',
+                      repo: repo,
+                      path: file,
+                      message: `Update ${file} from lighthouse-di-documentation`,
+                      content: Buffer.from(content).toString('base64'),
+                      branch: branchName
+                    });
+                    
+                    // Create a pull request
+                    await octokit.pulls.create({
+                      owner: 'department-of-veterans-affairs',
+                      repo: repo,
+                      title: `Update ${file} from lighthouse-di-documentation`,
+                      head: branchName,
+                      base: 'main',
+                      body: `This PR updates ${file} with the latest version from lighthouse-di-documentation.`
+                    });
+                    
+                    console.log(`Created PR to update ${file} in ${repo}`);
+                  }
+                } catch (error) {
+                  console.error(`Error updating ${file} in ${repo}: ${error}`);
+                }
+              }
+            }
+          }
+
+          pushFiles();
+        shell: node {0}
+
+  Detect-Out-Of-Sync-Files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+      
+      - name: Install dependencies
+        run: npm install @octokit/rest
+
+      - name: Detect out-of-sync files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          const { Octokit } = require("@octokit/rest");
+          const fs = require('fs').promises;
+
+          const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+
+          const filesToCheck = [
+            '.github/workflows/create-release-on-tag-push.yml',
+            '.github/pull_request_template.md'
+          ];
+
+          async function getLhdiRepos() {
+            const repos = await octokit.paginate(octokit.repos.listForOrg, {
+              org: 'department-of-veterans-affairs',
+              per_page: 100
+            });
+            return repos
+              .filter(repo => repo.name.startsWith('lighthouse-di-') || repo.name.startsWith('lhdi-'))
+              .map(repo => repo.name);
+          }
+
+          async function detectOutOfSyncFiles() {
+            const repos = await getLhdiRepos();
+            const outOfSyncRepos = [];
+
+            for (const repo of repos) {
+              for (const file of filesToCheck) {
+                try {
+                  const masterContent = await fs.readFile(file, 'utf8');
+                  const { data: repoFile } = await octokit.repos.getContent({
+                    owner: 'department-of-veterans-affairs',
+                    repo: repo,
+                    path: file,
+                    ref: 'main'
+                  });
+                  const repoContent = Buffer.from(repoFile.content, 'base64').toString('utf8');
+                  
+                  if (masterContent !== repoContent) {
+                    outOfSyncRepos.push({ repo, file });
+                  }
+                } catch (error) {
+                  if (error.status !== 404) console.error(`Error checking ${file} in ${repo}: ${error}`);
+                }
+              }
+            }
+
+            if (outOfSyncRepos.length > 0) {
+              console.log('The following files are out of sync:');
+              console.log(JSON.stringify(outOfSyncRepos, null, 2));
+            } else {
+              console.log('All files are in sync.');
+            }
+          }
+
+          detectOutOfSyncFiles();
+        shell: node {0}
